@@ -1,7 +1,6 @@
 package com.hotel.system.util;
 
-import java.time.Instant;
-import java.time.ZoneOffset;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 
 public final class TimeUtil {
@@ -9,6 +8,6 @@ public final class TimeUtil {
     }
 
     public static String nowIso() {
-        return DateTimeFormatter.ISO_INSTANT.format(Instant.now().atOffset(ZoneOffset.UTC));
+        return OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
     }
 }
