@@ -20,6 +20,8 @@ import com.hotel.system.util.TimeUtil;
 import org.springframework.ai.chat.client.ChatClient;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,17 +51,19 @@ public final class MultiAgentEngine {
         Files.createDirectories(cfg.outputDir);
         writer.initFiles();
 
-        String priorKnowledge = defaultPriorKnowledge();
+        PromptTemplates prompts = PromptTemplates.load();
+        String priorKnowledge = prompts.priorKnowledge;
         writer.appendConversationHeader(priorKnowledge);
         writer.appendArchitectureHeader();
 
-        CompiledGraph graph = buildGraph(priorKnowledge).compile();
+        CompiledGraph graph = buildGraph(prompts).compile();
         graph.setMaxIterations(recommendedMaxIterations());
         RunnableConfig config = RunnableConfig.builder().threadId("multi-agent-hotel-design").build();
         graph.invoke(Map.of(), config);
     }
 
-    private StateGraph buildGraph(String priorKnowledge) throws GraphStateException {
+    private StateGraph buildGraph(PromptTemplates prompts) throws GraphStateException {
+        String priorKnowledge = prompts.priorKnowledge;
         OverAllStateFactory stateFactory = () -> {
             OverAllState state = new OverAllState();
             state.registerKeyAndStrategy("prior_knowledge", new ReplaceStrategy());
@@ -96,25 +100,15 @@ public final class MultiAgentEngine {
             int iteration = intValue(state, "iteration", 1);
             String compactedHistory = stringValue(state, "compacted_history", "");
 
-            String system = """
-                    You are Orchestrator. Decide the next iteration goal for an ADD-style hotel system design.
-                    Output JSON with fields:
-                    - iteration_goal (string)
-                    - routing (string)
-                    - decision_log (array of strings)
-                    """.trim();
+            String system = prompts.orchestratorSystem;
 
             String suggested = defaultIterationGoal(iteration);
-            String user = """
-                    Context:
-                    - prior_knowledge: %s
-                    - compacted_history: %s
-                    Task:
-                    - iteration: %d
-                    - propose iteration goal (one focus only)
-                    Guidance:
-                    - prefer: %s
-                    """.formatted(priorKnowledge, safe(compactedHistory), iteration, suggested).trim();
+            String user = prompts.render(prompts.orchestratorUser, Map.of(
+                    "prior_knowledge", priorKnowledge,
+                    "compacted_history", safe(compactedHistory),
+                    "iteration", iteration,
+                    "prefer", suggested
+            ));
 
             JsonNode out = callJson(system, user);
             String goal = textOrFallback(out, "iteration_goal", suggested);
@@ -132,13 +126,10 @@ public final class MultiAgentEngine {
         var humanBefore = node_async(state -> {
             int iteration = intValue(state, "iteration", 1);
             String goal = stringValue(state, "iteration_goal", "");
-            String prompt = """
-                    Human Checkpoint #1 (before iteration)
-                    Iteration %d goal:
-                    %s
-
-                    Enter approve or retry:
-                    """.formatted(iteration, goal);
+            String prompt = prompts.render(prompts.humanCheckpointBefore, Map.of(
+                    "iteration", iteration,
+                    "goal", goal
+            ));
             String v = io.readKeyword(prompt, "approve", "retry");
             ObjectNode out = mapper.createObjectNode().put("human_input", v);
             Turn turn = toTurn("HumanCheckpointBefore", prompt, out);
@@ -157,31 +148,20 @@ public final class MultiAgentEngine {
             String compactedHistory = stringValue(state, "compacted_history", "");
 
             List<String> criticIssues = listOfStrings(state.value("critic_issues").orElse(List.of()));
-            String criticBlock = criticIssues.isEmpty() ? "" : """
-                    Critic feedback to address (revision %d):
-                    %s
-                    """.formatted(revision, String.join("\n", criticIssues)).trim();
+            String criticBlock = criticIssues.isEmpty() ? "" : prompts.render(prompts.architectCriticBlock, Map.of(
+                    "revision", revision,
+                    "issues", String.join("\n", criticIssues)
+            ));
 
-            String system = """
-                    You are Architect. Produce ADD Step 2-5 style design only.
-                    Output JSON with fields:
-                    - design (string)
-                    - diagram_code (string, Mermaid only)
-                    - decision_log (array of strings)
-                    """.trim();
+            String system = prompts.architectSystem;
 
-            String user = """
-                    Context:
-                    - prior_knowledge: %s
-                    - compacted_history: %s
-                    Iteration:
-                    - iteration: %d
-                    - goal: %s
-                    Constraints:
-                    - do not include QA checks; only design
-                    - keep to one main focus
-                    %s
-                    """.formatted(priorKnowledge, safe(compactedHistory), iteration, goal, criticBlock).trim();
+            String user = prompts.render(prompts.architectUser, Map.of(
+                    "prior_knowledge", priorKnowledge,
+                    "compacted_history", safe(compactedHistory),
+                    "iteration", iteration,
+                    "goal", goal,
+                    "critic_block", criticBlock
+            ));
 
             JsonNode out = callJson(system, user);
             String design = textOrFallback(out, "design", "TODO: design placeholder (no LLM configured).");
@@ -205,28 +185,14 @@ public final class MultiAgentEngine {
             String design = stringValue(state, "architect_design", "");
             String mermaid = stringValue(state, "architect_mermaid", "");
 
-            String system = """
-                    You are Critic. Verify QA/constraints coverage. Request revision if needed.
-                    Output JSON with fields:
-                    - pass (boolean)
-                    - issues (array of strings)
-                    - decision_log (array of strings)
-                    """.trim();
+            String system = prompts.criticSystem;
 
-            String user = """
-                    Context:
-                    - iteration: %d
-                    - goal: %s
-                    Review target:
-                    - design: %s
-                    - diagram_code: %s
-                    Checks:
-                    - QA coverage (requirements, constraints, interfaces)
-                    - ADD consistency
-                    - avoid missing key components for a hotel system
-                    Revision control:
-                    - if issues exist, set pass=false and list actionable issues
-                    """.formatted(iteration, goal, design, mermaid).trim();
+            String user = prompts.render(prompts.criticUser, Map.of(
+                    "iteration", iteration,
+                    "goal", goal,
+                    "design", design,
+                    "diagram_code", mermaid
+            ));
 
             JsonNode out = callJson(system, user);
 
@@ -292,21 +258,14 @@ public final class MultiAgentEngine {
         });
 
         var compactor = node_async(state -> {
-            String system = """
-                    You are Context Compactor. Summarize prior iterations into compact context.
-                    Output JSON with fields:
-                    - compacted_history (string)
-                    """.trim();
+            String system = prompts.contextCompactorSystem;
 
             @SuppressWarnings("unchecked")
             List<IterationResult> results = (List<IterationResult>) state.value("results").orElse(List.of());
 
-            String user = """
-                    Summarize the following iteration results into <= 1200 chars.
-                    Keep: key components, interfaces, constraints, unresolved issues.
-                    Results:
-                    %s
-                    """.formatted(renderResultsForCompaction(results)).trim();
+            String user = prompts.render(prompts.contextCompactorUser, Map.of(
+                    "results", renderResultsForCompaction(results)
+            ));
 
             JsonNode out = callJson(system, user);
             String compacted = textOrFallback(out, "compacted_history", simpleCompact(results));
@@ -323,13 +282,10 @@ public final class MultiAgentEngine {
         var humanAfter = node_async(state -> {
             int iteration = intValue(state, "iteration", 1);
             String goal = stringValue(state, "iteration_goal", "");
-            String prompt = """
-                    Human Checkpoint (after iteration)
-                    Iteration %d goal:
-                    %s
-
-                    Enter approve or retry:
-                    """.formatted(iteration, goal);
+            String prompt = prompts.render(prompts.humanCheckpointAfter, Map.of(
+                    "iteration", iteration,
+                    "goal", goal
+            ));
             String v = io.readKeyword(prompt, "approve", "retry");
             ObjectNode out = mapper.createObjectNode().put("human_input", v);
             Turn turn = toTurn("HumanCheckpointAfter", prompt, out);
@@ -577,28 +533,94 @@ public final class MultiAgentEngine {
         return t.substring(0, Math.max(0, max - 1)) + "…";
     }
 
-    public static String defaultPriorKnowledge() {
-        return """
-                Project: Multi-Agent Hotel System Design (ADD-style)
-                Agents:
-                - Orchestrator: plan iteration goals, route nodes
-                - Architect: produce design + Mermaid
-                - Critic: QA/constraints check, request revision (max 2)
-                - Scribe: consolidate final, log decisions and rationale
-                - Context Compactor: summarize history to avoid context overflow
-
-                Rules:
-                - Human checkpoint input only: approve / retry
-                - Structured JSON output from agents: design, diagram_code, issues, decision_log fields (as applicable)
-                - Run 4 iterations, sequential, with critic-architect revision loop up to 2
-                """.trim();
-    }
-
     private int recommendedMaxIterations() {
         int perIterationBase = 8;
         int perIterationRevisionWorst = 4 * Math.max(0, cfg.maxRevisions);
         int perIterationBudget = perIterationBase + perIterationRevisionWorst;
         int planned = Math.max(1, cfg.iterations) * perIterationBudget;
         return Math.max(100, planned + 20);
+    }
+
+    private static final class PromptTemplates {
+        private final String priorKnowledge;
+
+        private final String orchestratorSystem;
+        private final String orchestratorUser;
+
+        private final String humanCheckpointBefore;
+        private final String humanCheckpointAfter;
+
+        private final String architectSystem;
+        private final String architectUser;
+        private final String architectCriticBlock;
+
+        private final String criticSystem;
+        private final String criticUser;
+
+        private final String contextCompactorSystem;
+        private final String contextCompactorUser;
+
+        private PromptTemplates(
+                String priorKnowledge,
+                String orchestratorSystem,
+                String orchestratorUser,
+                String humanCheckpointBefore,
+                String humanCheckpointAfter,
+                String architectSystem,
+                String architectUser,
+                String architectCriticBlock,
+                String criticSystem,
+                String criticUser,
+                String contextCompactorSystem,
+                String contextCompactorUser
+        ) {
+            this.priorKnowledge = priorKnowledge;
+            this.orchestratorSystem = orchestratorSystem;
+            this.orchestratorUser = orchestratorUser;
+            this.humanCheckpointBefore = humanCheckpointBefore;
+            this.humanCheckpointAfter = humanCheckpointAfter;
+            this.architectSystem = architectSystem;
+            this.architectUser = architectUser;
+            this.architectCriticBlock = architectCriticBlock;
+            this.criticSystem = criticSystem;
+            this.criticUser = criticUser;
+            this.contextCompactorSystem = contextCompactorSystem;
+            this.contextCompactorUser = contextCompactorUser;
+        }
+
+        private String render(String template, Map<String, ?> vars) {
+            String out = template;
+            for (Map.Entry<String, ?> e : vars.entrySet()) {
+                String k = "{{" + e.getKey() + "}}";
+                Object v = e.getValue();
+                out = out.replace(k, v == null ? "" : v.toString());
+            }
+            return out.trim();
+        }
+
+        private static PromptTemplates load() throws IOException {
+            String base = "prompts/";
+            return new PromptTemplates(
+                    readResource(base + "prior_knowledge.md"),
+                    readResource(base + "orchestrator_system.md"),
+                    readResource(base + "orchestrator_user.md"),
+                    readResource(base + "human_checkpoint_before.md"),
+                    readResource(base + "human_checkpoint_after.md"),
+                    readResource(base + "architect_system.md"),
+                    readResource(base + "architect_user.md"),
+                    readResource(base + "architect_critic_block.md"),
+                    readResource(base + "critic_system.md"),
+                    readResource(base + "critic_user.md"),
+                    readResource(base + "context_compactor_system.md"),
+                    readResource(base + "context_compactor_user.md")
+            );
+        }
+
+        private static String readResource(String classpathLocation) throws IOException {
+            try (InputStream in = MultiAgentEngine.class.getClassLoader().getResourceAsStream(classpathLocation)) {
+                if (in == null) throw new IOException("Missing classpath resource: " + classpathLocation);
+                return new String(in.readAllBytes(), StandardCharsets.UTF_8).trim();
+            }
+        }
     }
 }

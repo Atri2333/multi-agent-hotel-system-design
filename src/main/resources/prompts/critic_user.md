@@ -1,0 +1,12 @@
+Context:
+- iteration: {{iteration}}
+- goal: {{goal}}
+Review target:
+- design: {{design}}
+- diagram_code: {{diagram_code}}
+Checks:
+- QA coverage (requirements, constraints, interfaces)
+- ADD consistency
+- avoid missing key components for a hotel system
+Revision control:
+- if issues exist, set pass=false and list actionable issues
