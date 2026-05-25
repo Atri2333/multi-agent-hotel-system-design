@@ -24,7 +24,7 @@ public class App {
         var cfg = AppConfig.fromEnv();
         var mapper = new ObjectMapper();
 
-        ChatModel chatModel = createChatModel(mapper);
+        ChatModel chatModel = createChatModel(mapper, cfg);
         ChatClient chatClient = ChatClient.builder(chatModel).build();
 
         var io = new ConsoleIO(new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)));
@@ -38,7 +38,22 @@ public class App {
         log.info(" - {}", cfg.outputDir.resolve("architecture_report.md").toAbsolutePath());
     }
 
-    private static ChatModel createChatModel(ObjectMapper mapper) {
+    private static ChatModel createChatModel(ObjectMapper mapper, AppConfig cfg) {
+        if (cfg.openAiApiKey != null && !cfg.openAiApiKey.isBlank()) {
+            String baseUrl = cfg.openAiBaseUrl != null && !cfg.openAiBaseUrl.isBlank() ? cfg.openAiBaseUrl : "https://api.openai.com";
+            var openAiApi = org.springframework.ai.openai.api.OpenAiApi.builder()
+                    .baseUrl(baseUrl)
+                    .apiKey(cfg.openAiApiKey)
+                    .build();
+            var options = org.springframework.ai.openai.OpenAiChatOptions.builder()
+                    .model(cfg.openAiModel)
+                    .build();
+            return org.springframework.ai.openai.OpenAiChatModel.builder()
+                    .openAiApi(openAiApi)
+                    .defaultOptions(options)
+                    .build();
+        }
+
         String key = System.getenv("AI_DASHSCOPE_API_KEY");
         if (key != null && !key.isBlank()) {
             DashScopeApi dashScopeApi = DashScopeApi.builder().apiKey(key).build();

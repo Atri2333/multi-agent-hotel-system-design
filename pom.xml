@@ -61,6 +61,10 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-client-chat</artifactId>
         </dependency>
         <dependency>
