@@ -3,6 +3,4 @@ Context:
 - compacted_history: {{compacted_history}}
 Task:
 - iteration: {{iteration}}
-- propose iteration goal (one focus only)
-Guidance:
-- prefer: {{prefer}}
+- set iteration_goal using the fixed iteration plan in the system instructions

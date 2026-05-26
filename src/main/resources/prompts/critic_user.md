@@ -9,6 +9,6 @@ Review target:
 Checks:
 - QA coverage (requirements, constraints, interfaces)
 - ADD consistency
-- avoid missing key components for a hotel system
+- avoid missing key components implied by the HPS use cases, quality attributes, concerns, and constraints
 Revision control:
 - if issues exist, set pass=false and list actionable issues
