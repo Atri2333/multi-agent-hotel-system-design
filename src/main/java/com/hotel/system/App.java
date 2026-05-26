@@ -8,6 +8,7 @@ import com.hotel.system.io.ConsoleIO;
 import com.hotel.system.log.MarkdownLogWriter;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
+import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -39,6 +40,20 @@ public class App {
     }
 
     private static ChatModel createChatModel(ObjectMapper mapper, AppConfig cfg) {
+        // 特殊处理：如果是 qwen 系列模型（尤其是 qwen3-32b），并且使用了百炼的 API Key，
+        // 则直接切换为 Spring AI Alibaba 专属的 DashScopeChatModel，以便支持 enable_thinking 等特有参数。
+        if (cfg.openAiApiKey != null && !cfg.openAiApiKey.isBlank() && cfg.openAiModel != null && cfg.openAiModel.toLowerCase().startsWith("qwen")) {
+            DashScopeApi dashScopeApi = DashScopeApi.builder().apiKey(cfg.openAiApiKey).build();
+            DashScopeChatOptions options = DashScopeChatOptions.builder()
+                    .withModel(cfg.openAiModel)
+                    .withEnableThinking(false)
+                    .build();
+            return DashScopeChatModel.builder()
+                    .dashScopeApi(dashScopeApi)
+                    .defaultOptions(options)
+                    .build();
+        }
+
         if (cfg.openAiApiKey != null && !cfg.openAiApiKey.isBlank()) {
             String baseUrl = cfg.openAiBaseUrl != null && !cfg.openAiBaseUrl.isBlank() ? cfg.openAiBaseUrl : "https://api.openai.com";
             var openAiApi = org.springframework.ai.openai.api.OpenAiApi.builder()

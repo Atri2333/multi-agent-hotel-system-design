@@ -1,6 +1,8 @@
 package com.hotel.system.config;
 
+import java.io.InputStream;
 import java.nio.file.Path;
+import java.util.Properties;
 
 public final class AppConfig {
     public final int iterations;
@@ -21,18 +23,40 @@ public final class AppConfig {
     }
 
     public static AppConfig fromEnv() {
-        int iterations = parseIntOrDefault(System.getenv("MA_ITERATIONS"), 4);
-        int maxRevisions = parseIntOrDefault(System.getenv("MA_MAX_REVISIONS"), 2);
+        Properties props = new Properties();
+        try (InputStream in = AppConfig.class.getClassLoader().getResourceAsStream("application.properties")) {
+            if (in != null) {
+                props.load(in);
+            }
+        } catch (Exception ignored) {
+        }
 
-        String out = System.getenv("MA_OUTPUT_DIR");
+        int iterations = parseIntOrDefault(getPropOrEnv(props, "ma.iterations", "MA_ITERATIONS"), 4);
+        int maxRevisions = parseIntOrDefault(getPropOrEnv(props, "ma.max-revisions", "MA_MAX_REVISIONS"), 2);
+
+        String out = getPropOrEnv(props, "ma.output-dir", "MA_OUTPUT_DIR");
         Path outputDir = out == null || out.isBlank() ? Path.of("").toAbsolutePath() : Path.of(out).toAbsolutePath();
 
-        String baseUrl = System.getenv("OPENAI_BASE_URL");
-        String apiKey = System.getenv("OPENAI_API_KEY");
-        String model = System.getenv("OPENAI_MODEL");
+        String baseUrl = getPropOrEnv(props, "spring.ai.openai.base-url", "APP_OPENAI_BASE_URL");
+        String apiKey = getPropOrEnv(props, "spring.ai.openai.api-key", "APP_OPENAI_API_KEY");
+        String model = getPropOrEnv(props, "spring.ai.openai.chat.options.model", "APP_OPENAI_MODEL");
         if (model == null || model.isBlank()) model = "qwen3-32b";
 
         return new AppConfig(iterations, maxRevisions, outputDir, baseUrl, apiKey, model);
+    }
+
+    private static String getPropOrEnv(Properties props, String propKey, String envKey) {
+        // Priority 1: application.properties
+        String propVal = props.getProperty(propKey);
+        if (propVal != null && !propVal.isBlank()) {
+            return propVal.trim();
+        }
+        // Priority 2: Environment variables
+        String envVal = System.getenv(envKey);
+        if (envVal != null && !envVal.isBlank()) {
+            return envVal.trim();
+        }
+        return null;
     }
 
     private static int parseIntOrDefault(String v, int d) {

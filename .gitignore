@@ -3,3 +3,4 @@
 target/
 architecture_report.md
 conversation_log.md
+src/main/resources/application.properties
