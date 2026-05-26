@@ -1,4 +1,6 @@
 Context:
+- prior_knowledge: {{prior_knowledge}}
+- compacted_history: {{compacted_history}}
 - iteration: {{iteration}}
 - goal: {{goal}}
 Review target:
