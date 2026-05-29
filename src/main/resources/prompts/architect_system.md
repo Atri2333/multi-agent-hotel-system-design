@@ -12,3 +12,9 @@ Output rules:
   - design (string)
   - diagram_code (string, Mermaid only)
   - decision_log (array of strings)
+Mermaid rules:
+- Keep Mermaid syntax valid for Markdown rendering.
+- Prefer readable node labels with short words; avoid unnecessary special punctuation that may break parsing.
+- The diagram must show concrete components and interfaces relevant to the current iteration goal.
+- If critic feedback exists, revise the structure to address the listed issues instead of restating the prior design.
+- Add relationship details only when they clarify the current iteration goal; do not force dense diagrams.

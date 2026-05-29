@@ -6,5 +6,7 @@ Iteration:
 - goal: {{goal}}
 Constraints:
 - do not include QA checks; only design
-- keep to one main focus
+- cover all required drivers for the current iteration goal
+- make interfaces and key flows explicit and traceable in diagram_code
+- compared with prior iterations, increase detail only where required by the current iteration goal
 {{critic_block}}

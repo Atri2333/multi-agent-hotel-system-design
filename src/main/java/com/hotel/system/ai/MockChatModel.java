@@ -30,7 +30,7 @@ public final class MockChatModel implements ChatModel {
         String sys = system == null ? "" : system.toLowerCase(Locale.ROOT);
 
         if (sys.contains("orchestrator")) {
-            out.put("iteration_goal", pickFromUser(user, "prefer:", "Define scope"));
+            out.put("iteration_goal", pickFromUser(user, "prefer:", "Establishing an Overall System Structure"));
             out.put("routing", "HumanCheckpoint -> Architect -> Critic(loop<=2) -> Scribe -> ContextCompactor");
             ArrayNode d = out.putArray("decision_log");
             d.add("Single-focus goal for this iteration.");
