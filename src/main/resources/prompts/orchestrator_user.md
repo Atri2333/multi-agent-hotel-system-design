@@ -3,4 +3,5 @@ Context:
 - compacted_history: {{compacted_history}}
 Task:
 - iteration: {{iteration}}
-- set iteration_goal using the fixed iteration plan in the system instructions
+- set iteration_goal by copying the exact fixed goal text from the system instructions for this iteration
+- do not paraphrase, shorten, or generalize the goal

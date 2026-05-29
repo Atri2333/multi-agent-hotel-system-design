@@ -11,8 +11,14 @@ public final class IterationResult {
     private final List<String> decisionLog;
     private final int revisionsUsed;
     private final String ts;
+    private final int promptTokens;
+    private final int completionTokens;
+    private final int totalTokens;
+    private final int humanTurns;
+    private final int agentTurns;
+    private final long durationMs;
 
-    public IterationResult(int iteration, String goal, String design, String mermaid, List<String> issues, List<String> decisionLog, int revisionsUsed, String ts) {
+    public IterationResult(int iteration, String goal, String design, String mermaid, List<String> issues, List<String> decisionLog, int revisionsUsed, String ts, int promptTokens, int completionTokens, int totalTokens, int humanTurns, int agentTurns, long durationMs) {
         this.iteration = iteration;
         this.goal = goal;
         this.design = design;
@@ -21,6 +27,12 @@ public final class IterationResult {
         this.decisionLog = decisionLog;
         this.revisionsUsed = revisionsUsed;
         this.ts = ts;
+        this.promptTokens = promptTokens;
+        this.completionTokens = completionTokens;
+        this.totalTokens = totalTokens;
+        this.humanTurns = humanTurns;
+        this.agentTurns = agentTurns;
+        this.durationMs = durationMs;
     }
 
     public int getIteration() {
@@ -53,5 +65,29 @@ public final class IterationResult {
 
     public String getTs() {
         return ts;
+    }
+
+    public int getPromptTokens() {
+        return promptTokens;
+    }
+
+    public int getCompletionTokens() {
+        return completionTokens;
+    }
+
+    public int getTotalTokens() {
+        return totalTokens;
+    }
+
+    public int getHumanTurns() {
+        return humanTurns;
+    }
+
+    public int getAgentTurns() {
+        return agentTurns;
+    }
+
+    public long getDurationMs() {
+        return durationMs;
     }
 }

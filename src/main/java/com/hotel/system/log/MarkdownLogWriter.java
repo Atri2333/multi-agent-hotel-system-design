@@ -56,6 +56,9 @@ public final class MarkdownLogWriter {
     }
 
     public void appendConversationTurn(Turn t) throws IOException {
+        String tokens = """
+                prompt=%d, completion=%d, total=%d
+                """.formatted(t.getPromptTokens(), t.getCompletionTokens(), t.getTotalTokens()).trim();
         String s = """
                 ### %s — %s
 
@@ -71,7 +74,10 @@ public final class MarkdownLogWriter {
                 %s
                 ```
 
-                """.formatted(t.getTs(), t.getNode(), t.getInput().trim(), t.getOutputJson().trim());
+                **Tokens**
+                %s
+
+                """.formatted(t.getTs(), t.getNode(), t.getInput().trim(), t.getOutputJson().trim(), tokens);
         append(conversationPath, s);
     }
 
@@ -100,6 +106,14 @@ public final class MarkdownLogWriter {
                 ? "- None"
                 : r.getDecisionLog().stream().map(x -> "- " + x).reduce((a, b) -> a + "\n" + b).orElse("- None");
 
+        ObjectNode cost = mapper.createObjectNode();
+        cost.put("prompt_tokens", r.getPromptTokens());
+        cost.put("completion_tokens", r.getCompletionTokens());
+        cost.put("total_tokens", r.getTotalTokens());
+        cost.put("human_turns", r.getHumanTurns());
+        cost.put("agent_turns", r.getAgentTurns());
+        cost.put("duration_ms", r.getDurationMs());
+
         String s = """
                 ## Iteration %d
 
@@ -125,6 +139,11 @@ public final class MarkdownLogWriter {
                 **Decision Log**
                 %s
 
+                **Interaction Cost**
+                ```json
+                %s
+                ```
+
                 """.formatted(
                 r.getIteration(),
                 r.getGoal().trim(),
@@ -132,7 +151,8 @@ public final class MarkdownLogWriter {
                 r.getDesign().trim(),
                 r.getMermaid().trim(),
                 issues,
-                decisions
+                decisions,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(cost).trim()
         );
 
         append(reportPath, s);

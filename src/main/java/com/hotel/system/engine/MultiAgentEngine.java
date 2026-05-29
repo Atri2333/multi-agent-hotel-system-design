@@ -18,6 +18,9 @@ import com.hotel.system.state.IterationResult;
 import com.hotel.system.state.Turn;
 import com.hotel.system.util.TimeUtil;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.metadata.EmptyUsage;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,6 +41,7 @@ public final class MultiAgentEngine {
     private final ChatClient chatClient;
     private final ConsoleIO io;
     private final MarkdownLogWriter writer;
+    private final IterationStats stats = new IterationStats();
 
     public MultiAgentEngine(AppConfig cfg, ObjectMapper mapper, ChatClient chatClient, ConsoleIO io, MarkdownLogWriter writer) {
         this.cfg = cfg;
@@ -110,10 +114,12 @@ public final class MultiAgentEngine {
                     "prefer", suggested
             ));
 
-            JsonNode out = callJson(system, user);
+            CallResult call = callJson(system, user);
+            JsonNode out = call.json();
             String goal = textOrFallback(out, "iteration_goal", suggested);
 
-            Turn turn = toTurn("Orchestrator", user, out);
+            Turn turn = toTurn("Orchestrator", user, out, call.usage());
+            stats.addAgentTurn(iteration, turn);
             writer.appendConversationTurn(turn);
             return Map.of(
                     "iteration_goal", goal,
@@ -132,7 +138,8 @@ public final class MultiAgentEngine {
             ));
             String v = io.readKeyword(prompt, "approve", "retry");
             ObjectNode out = mapper.createObjectNode().put("human_input", v);
-            Turn turn = toTurn("HumanCheckpointBefore", prompt, out);
+            Turn turn = toTurn("HumanCheckpointBefore", prompt, out, emptyUsage());
+            stats.addHumanTurn(iteration, turn);
             writer.appendConversationTurn(turn);
             return Map.of(
                     "human_before", v,
@@ -163,12 +170,14 @@ public final class MultiAgentEngine {
                     "critic_block", criticBlock
             ));
 
-            JsonNode out = callJson(system, user);
+            CallResult call = callJson(system, user);
+            JsonNode out = call.json();
             String design = textOrFallback(out, "design", "TODO: design placeholder (no LLM configured).");
             String mermaid = textOrFallback(out, "diagram_code", defaultMermaid(iteration));
             List<String> decisionLog = arrayOfStrings(out.get("decision_log"));
 
-            Turn turn = toTurn("Architect", user, out);
+            Turn turn = toTurn("Architect", user, out, call.usage());
+            stats.addAgentTurn(iteration, turn);
             writer.appendConversationTurn(turn);
             return Map.of(
                     "architect_design", design,
@@ -184,17 +193,21 @@ public final class MultiAgentEngine {
             String goal = stringValue(state, "iteration_goal", "");
             String design = stringValue(state, "architect_design", "");
             String mermaid = stringValue(state, "architect_mermaid", "");
+            String compactedHistory = stringValue(state, "compacted_history", "");
 
             String system = prompts.criticSystem;
 
             String user = prompts.render(prompts.criticUser, Map.of(
+                    "prior_knowledge", priorKnowledge,
+                    "compacted_history", safe(compactedHistory),
                     "iteration", iteration,
                     "goal", goal,
                     "design", design,
                     "diagram_code", mermaid
             ));
 
-            JsonNode out = callJson(system, user);
+            CallResult call = callJson(system, user);
+            JsonNode out = call.json();
 
             boolean pass = boolOrFallback(out, "pass", true);
             List<String> issues = arrayOfStrings(out.get("issues"));
@@ -204,7 +217,8 @@ public final class MultiAgentEngine {
             int nextRevision = revision;
             if (!pass && revision < cfg.maxRevisions) nextRevision = revision + 1;
 
-            Turn turn = toTurn("Critic", user, out);
+            Turn turn = toTurn("Critic", user, out, call.usage());
+            stats.addAgentTurn(iteration, turn);
             writer.appendConversationTurn(turn);
             return Map.of(
                     "critic_pass", pass,
@@ -237,7 +251,13 @@ public final class MultiAgentEngine {
                     criticIssues,
                     mergedDecisions,
                     revisionsUsed,
-                    ts
+                    ts,
+                    stats.getPromptTokensForIteration(iteration),
+                    stats.getCompletionTokensForIteration(iteration),
+                    stats.getTotalTokensForIteration(iteration),
+                    stats.getHumanTurnsForIteration(iteration),
+                    stats.getAgentTurnsForIteration(iteration),
+                    stats.getDurationMsForIteration(iteration)
             );
 
             writer.appendArchitectureIteration(result);
@@ -249,7 +269,8 @@ public final class MultiAgentEngine {
             out.put("finalized", true);
             out.put("issues_count", criticIssues.size());
 
-            Turn turn = toTurn("Scribe", "Finalize iteration result and write logs.", out);
+            Turn turn = toTurn("Scribe", "Finalize iteration result and write logs.", out, emptyUsage());
+            stats.addAgentTurn(iteration, turn);
             writer.appendConversationTurn(turn);
             return Map.of(
                     "results", result,
@@ -258,6 +279,7 @@ public final class MultiAgentEngine {
         });
 
         var compactor = node_async(state -> {
+            int iteration = intValue(state, "iteration", 1);
             String system = prompts.contextCompactorSystem;
 
             @SuppressWarnings("unchecked")
@@ -267,10 +289,12 @@ public final class MultiAgentEngine {
                     "results", renderResultsForCompaction(results)
             ));
 
-            JsonNode out = callJson(system, user);
+            CallResult call = callJson(system, user);
+            JsonNode out = call.json();
             String compacted = textOrFallback(out, "compacted_history", simpleCompact(results));
 
-            Turn turn = toTurn("ContextCompactor", user, out);
+            Turn turn = toTurn("ContextCompactor", user, out, call.usage());
+            stats.addAgentTurn(iteration, turn);
             writer.appendConversationTurn(turn);
             return Map.of(
                     "compacted_history", compacted,
@@ -288,10 +312,18 @@ public final class MultiAgentEngine {
             ));
             String v = io.readKeyword(prompt, "approve", "retry");
             ObjectNode out = mapper.createObjectNode().put("human_input", v);
-            Turn turn = toTurn("HumanCheckpointAfter", prompt, out);
+            Turn turn = toTurn("HumanCheckpointAfter", prompt, out, emptyUsage());
+            stats.addHumanTurn(iteration, turn);
             writer.appendConversationTurn(turn);
             if ("retry".equalsIgnoreCase(v)) {
-                writer.appendConversationNote("Checkpoint retry: re-using the same iteration artifacts; no content edits allowed.");
+                writer.appendConversationNote("Checkpoint retry: rerun Architect and Critic for the same iteration goal.");
+            }
+            if ("retry".equalsIgnoreCase(v)) {
+                return Map.of(
+                        "human_after", v,
+                        "revision_count", 0,
+                        "conversation", turn
+                );
             }
             return Map.of(
                     "human_after", v,
@@ -362,7 +394,7 @@ public final class MultiAgentEngine {
                 .addEdge("scribe", "context_compactor")
                 .addEdge("context_compactor", "human_checkpoint_after")
                 .addConditionalEdges("human_checkpoint_after", checkpointAfterDecision, Map.of(
-                        "retry", "human_checkpoint_after",
+                        "retry", "architect",
                         "approve", "next_iteration"
                 ))
                 .addConditionalEdges("next_iteration", continueDecision, Map.of(
@@ -371,27 +403,49 @@ public final class MultiAgentEngine {
                 ));
     }
 
-    private JsonNode callJson(String system, String user) {
-        String content = chatClient.prompt().system(system).user(user).call().content();
+    private CallResult callJson(String system, String user) {
+        ChatResponse response = chatClient.prompt().system(system).user(user).call().chatResponse();
+        Usage usage = emptyUsage();
+        String content = "";
+        if (response != null) {
+            if (response.getMetadata() != null && response.getMetadata().getUsage() != null) {
+                usage = response.getMetadata().getUsage();
+            }
+            if (response.getResult() != null && response.getResult().getOutput() != null
+                    && response.getResult().getOutput().getText() != null) {
+                content = response.getResult().getOutput().getText();
+            }
+        }
         if (content == null) content = "";
         String stripped = stripCodeFences(content.trim());
         try {
             JsonNode n = mapper.readTree(stripped);
-            if (n != null && n.isObject()) return n;
+            if (n != null && n.isObject()) return new CallResult(n, usage);
             ObjectNode wrapped = mapper.createObjectNode();
             wrapped.set("value", n);
-            return wrapped;
+            return new CallResult(wrapped, usage);
         } catch (Exception e) {
             ObjectNode wrapped = mapper.createObjectNode();
             wrapped.put("raw_text", content);
-            return wrapped;
+            return new CallResult(wrapped, usage);
         }
     }
 
-    private Turn toTurn(String node, String input, JsonNode output) throws IOException {
+    private Turn toTurn(String node, String input, JsonNode output, Usage usage) throws IOException {
         String ts = TimeUtil.nowIso();
         String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(output);
-        return new Turn(ts, node, input, json);
+        int promptTokens = tokenOrZero(usage == null ? null : usage.getPromptTokens());
+        int completionTokens = tokenOrZero(usage == null ? null : usage.getCompletionTokens());
+        int totalTokens = tokenOrZero(usage == null ? null : usage.getTotalTokens());
+        return new Turn(ts, node, input, json, promptTokens, completionTokens, totalTokens);
+    }
+
+    private int tokenOrZero(Integer value) {
+        return value == null ? 0 : Math.max(0, value);
+    }
+
+    private Usage emptyUsage() {
+        return new EmptyUsage();
     }
 
     private String stripCodeFences(String s) {
@@ -405,10 +459,10 @@ public final class MultiAgentEngine {
 
     private String defaultIterationGoal(int iteration) {
         return switch (iteration) {
-            case 1 -> "Define scope, stakeholders, quality attributes, and key scenarios for a hotel system (ADD inputs).";
-            case 2 -> "Design core domain components and their responsibilities (booking, inventory, pricing, customer, payment).";
-            case 3 -> "Design service interfaces/APIs, integration boundaries, and interaction flows for key scenarios.";
-            case 4 -> "Design deployment view, data/storage choices, observability, and evolution strategy.";
+            case 1 -> "Establishing an Overall System Structure";
+            case 2 -> "Identifying Structures to Support Primary Functionality";
+            case 3 -> "Addressing Reliability and Availability Quality Attributes";
+            case 4 -> "Addressing Development and Operations";
             default -> "Continue refining the architecture using ADD.";
         };
     }
@@ -418,7 +472,7 @@ public final class MultiAgentEngine {
         return """
                 flowchart TB
                   subgraph %s
-                    UI[Web/App UI]
+                    UI[Web App UI]
                     API[API Gateway]
                     RES[Reservation Service]
                     INV[Inventory Service]
@@ -444,7 +498,26 @@ public final class MultiAgentEngine {
             s = s.replaceFirst("(?s)^```\\w*\\s*", "");
             s = s.replaceFirst("(?s)```\\s*$", "");
         }
-        return s.trim();
+        // Convert Mermaid round-node syntax `ID(Label)` to square-node syntax `ID[Label]`
+        // so labels remain valid even when models mix styles.
+        s = s.replaceAll("([A-Za-z][A-Za-z0-9_]*)\\(([^\\)\\n]+)\\)", "$1[$2]");
+        // Fix malformed dotted edge label suffix like `|REST API|. B` -> `|REST API| B`.
+        s = s.replaceAll("\\|\\s*\\.\\s*([A-Za-z][A-Za-z0-9_]*)", "| $1");
+        // Split accidentally concatenated statements like `... ]C -.-> ...`.
+        s = s.replaceAll("\\]([A-Za-z][A-Za-z0-9_]*)\\s*(-\\.|--|==)", "]\n$1 $2");
+        String[] lines = s.split("\\R");
+        List<String> normalized = new ArrayList<>();
+        for (String line : lines) {
+            String t = line;
+            // Drop style/class directives because LLMs often emit invalid Mermaid style syntax.
+            String lower = t.trim().toLowerCase();
+            if (lower.startsWith("classdef ") || lower.startsWith("class ") || lower.startsWith("style ")) {
+                continue;
+            }
+            t = t.replaceAll("\\s{2,}", " ").trim();
+            if (!t.isBlank()) normalized.add(t);
+        }
+        return String.join("\n", normalized).trim();
     }
 
     private String renderResultsForCompaction(List<IterationResult> results) {
@@ -541,6 +614,93 @@ public final class MultiAgentEngine {
         return Math.max(100, planned + 20);
     }
 
+    private static final class CallResult {
+        private final JsonNode json;
+        private final Usage usage;
+
+        private CallResult(JsonNode json, Usage usage) {
+            this.json = json;
+            this.usage = usage;
+        }
+
+        private JsonNode json() {
+            return json;
+        }
+
+        private Usage usage() {
+            return usage;
+        }
+    }
+
+    private static final class IterationStats {
+        private final List<PerIteration> rows = new ArrayList<>();
+
+        private void addAgentTurn(int iteration, Turn turn) {
+            PerIteration row = row(iteration);
+            row.agentTurns++;
+            addTokensAndTiming(row, turn);
+        }
+
+        private void addHumanTurn(int iteration, Turn turn) {
+            PerIteration row = row(iteration);
+            row.humanTurns++;
+            addTokensAndTiming(row, turn);
+        }
+
+        private int getPromptTokensForIteration(int iteration) {
+            return row(iteration).promptTokens;
+        }
+
+        private int getCompletionTokensForIteration(int iteration) {
+            return row(iteration).completionTokens;
+        }
+
+        private int getTotalTokensForIteration(int iteration) {
+            return row(iteration).totalTokens;
+        }
+
+        private int getHumanTurnsForIteration(int iteration) {
+            return row(iteration).humanTurns;
+        }
+
+        private int getAgentTurnsForIteration(int iteration) {
+            return row(iteration).agentTurns;
+        }
+
+        private long getDurationMsForIteration(int iteration) {
+            PerIteration row = row(iteration);
+            if (row.firstMs <= 0 || row.lastMs < row.firstMs) return 0L;
+            return row.lastMs - row.firstMs;
+        }
+
+        private void addTokensAndTiming(PerIteration row, Turn turn) {
+            long now = System.currentTimeMillis();
+            if (row.firstMs == 0L) row.firstMs = now;
+            row.lastMs = now;
+            row.promptTokens += Math.max(0, turn.getPromptTokens());
+            row.completionTokens += Math.max(0, turn.getCompletionTokens());
+            row.totalTokens += Math.max(0, turn.getTotalTokens());
+        }
+
+        private PerIteration row(int iteration) {
+            int idx = Math.max(1, iteration) - 1;
+            while (rows.size() <= idx) {
+                rows.add(new PerIteration());
+            }
+            return rows.get(idx);
+        }
+
+        private static final class PerIteration {
+            private int promptTokens;
+            private int completionTokens;
+            private int totalTokens;
+            private int humanTurns;
+            private int agentTurns;
+            private long firstMs;
+            private long lastMs;
+        }
+    }
+
     private static final class PromptTemplates {
         private final String priorKnowledge;
 
@@ -624,3 +784,5 @@ public final class MultiAgentEngine {
         }
     }
 }
+
+
